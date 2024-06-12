@@ -4,9 +4,11 @@ import asyncio
 import websockets
 import json
 import threading
+import time
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///websocket_data.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 class WebSocketMessage(db.Model):
@@ -99,68 +101,55 @@ def get_messages():
     ''', messages=messages)
 
 async def store_message(uri):
-    async with websockets.connect(uri) as websocket:
-        while True:
-            message = await websocket.recv()
-            data = json.loads(message)
+    async for websocket in websockets.connect(uri):
+        try:
+            while True:
+                message = await websocket.recv()
+                data = json.loads(message)
 
-            if isinstance(data, list):
-                for item in data:
-                    websocket_message = WebSocketMessage(
-                        event_type=item.get('event_type'),
-                        fee_rate_bps=item.get('fee_rate_bps'),
-                        market_asset_id=item['market'].get('asset_id'),
-                        market_condition_id=item['market'].get('condition_id'),
-                        market_icon=item['market'].get('icon'),
-                        market_question=item['market'].get('question'),
-                        market_slug=item['market'].get('slug'),
-                        outcome=item.get('outcome'),
-                        outcome_index=item.get('outcome_index'),
-                        price=item.get('price'),
-                        side=item.get('side'),
-                        size=item.get('size'),
-                        timestamp=item.get('timestamp'),
-                        transaction_hash=item.get('transaction_hash', ''),
-                        user_bio=item['user'].get('bio', ''),
-                        user_displayUsernamePublic=item['user'].get('displayUsernamePublic'),
-                        user_name=item['user'].get('name'),
-                        user_profileImage=item['user'].get('profileImage', ''),
-                        user_proxyWallet=item['user'].get('proxyWallet'),
-                        user_pseudonym=item['user'].get('pseudonym')
-                    )
-                    with app.app_context():
-                        db.session.add(websocket_message)
-                        db.session.commit()
-            else:
-                websocket_message = WebSocketMessage(
-                    event_type=data.get('event_type'),
-                    fee_rate_bps=data.get('fee_rate_bps'),
-                    market_asset_id=data['market'].get('asset_id'),
-                    market_condition_id=data['market'].get('condition_id'),
-                    market_icon=data['market'].get('icon'),
-                    market_question=data['market'].get('question'),
-                    market_slug=data['market'].get('slug'),
-                    outcome=data.get('outcome'),
-                    outcome_index=data.get('outcome_index'),
-                    price=data.get('price'),
-                    side=data.get('side'),
-                    size=data.get('size'),
-                    timestamp=data.get('timestamp'),
-                    transaction_hash=data.get('transaction_hash', ''),
-                    user_bio=data['user'].get('bio', ''),
-                    user_displayUsernamePublic=data['user'].get('displayUsernamePublic'),
-                    user_name=data['user'].get('name'),
-                    user_profileImage=data['user'].get('profileImage', ''),
-                    user_proxyWallet=data['user'].get('proxyWallet'),
-                    user_pseudonym=data['user'].get('pseudonym')
-                )
-                with app.app_context():
-                    db.session.add(websocket_message)
-                    db.session.commit()
+                if isinstance(data, list):
+                    for item in data:
+                        await save_message_to_db(item)
+                else:
+                    await save_message_to_db(data)
+        except websockets.ConnectionClosed:
+            print("WebSocket connection closed, retrying in 5 seconds...")
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"An error occurred: {e}, retrying in 5 seconds...")
+            await asyncio.sleep(5)
+
+async def save_message_to_db(data):
+    websocket_message = WebSocketMessage(
+        event_type=data.get('event_type'),
+        fee_rate_bps=data.get('fee_rate_bps'),
+        market_asset_id=data['market'].get('asset_id'),
+        market_condition_id=data['market'].get('condition_id'),
+        market_icon=data['market'].get('icon'),
+        market_question=data['market'].get('question'),
+        market_slug=data['market'].get('slug'),
+        outcome=data.get('outcome'),
+        outcome_index=data.get('outcome_index'),
+        price=data.get('price'),
+        side=data.get('side'),
+        size=data.get('size'),
+        timestamp=data.get('timestamp'),
+        transaction_hash=data.get('transaction_hash', ''),
+        user_bio=data['user'].get('bio', ''),
+        user_displayUsernamePublic=data['user'].get('displayUsernamePublic'),
+        user_name=data['user'].get('name'),
+        user_profileImage=data['user'].get('profileImage', ''),
+        user_proxyWallet=data['user'].get('proxyWallet'),
+        user_pseudonym=data['user'].get('pseudonym')
+    )
+    with app.app_context():
+        db.session.add(websocket_message)
+        db.session.commit()
 
 def start_websocket_listener():
     asyncio.run(store_message("wss://ws-subscriptions-clob.polymarket.com/ws/live-activity"))
 
 if __name__ == '__main__':
-    threading.Thread(target=start_websocket_listener).start()
+    websocket_thread = threading.Thread(target=start_websocket_listener)
+    websocket_thread.start()
     app.run(debug=True)
