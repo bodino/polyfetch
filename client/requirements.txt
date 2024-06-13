@@ -1,0 +1,5 @@
+click
+Flask
+Flask-SQLAlchemy
+pytz
+colorama
